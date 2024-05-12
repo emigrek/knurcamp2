@@ -5,25 +5,25 @@
 
 void weryfikacja1(void* ss, int sz)
 {
-    char* st = (char*)ss;
-    int wiek = *st;
-    if(wiek != 105)
+    char* st = (char*)ss; // Konwersja pozwalajaca na dostep do surowych bajtow
+    int wiek = *st; // Odczytanie wartosci pod adresem st, na tym etapie st wskazuje na poczatek struktury czyli wiek
+    if(wiek != 105) // Walidacja
     {
         printf("Błędne rozwiązanie\n");
         return;
     }
-    st += sz / 3;
+    st += sz / 3; // Przesuniecie wskaznika do nastepnej danej w strukturze
     uint64_t imiePtr = (*(uint64_t*)st);
     char* imie = (char*)imiePtr;
-    st += sz / 3;
+    st += sz / 3; // Przesuniecie wskaznika do nastepnej danej w strukturze
 
-    if(strcmp(imie, "Jan") != 0)
+    if(strcmp(imie, "Jan") != 0) // Walidacja
     {
         printf("Błędne rozwiązanie\n");
         return;
     }
     float wzrost = *(float*)st;
-    if(wzrost < 2.138 && wzrost > 2.136)
+    if(wzrost < 2.138 && wzrost > 2.136) // Walidacja
     {
         printf("Brawo poprawne rozwiązanie\n");
     }
