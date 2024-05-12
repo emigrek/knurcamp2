@@ -2,3 +2,4 @@ utils/
 main.dSYM/
 *.o
 main
+out
