@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <signal.h>
 
 const char* STATIC_RESPONSE =
         "HTTP/1.1 200 OK\r\n"
@@ -42,8 +44,9 @@ const char* STATIC_RESPONSE_SUCHA_KREWETA =
 
 
 #define INPUT_BUFFER_SIZE 4096
+#define MAX_CLIENTS       1024
 
-void findPath(const char* request, char* target) {
+void find_path(const char* request, char* target) {
     while(*(request)++ != ' ') {}
     while(*request != ' ') {
         *(target)++ = *(request)++;
@@ -51,12 +54,21 @@ void findPath(const char* request, char* target) {
     *target = 0x00;
 }
 
-const char* pseudoRouter(const char* requestedPath)
+int find_free_socket(int* sockets, int size) {
+    for(int i=0;i<size;i++)
+    {
+        if(sockets[i] == 0)
+            return i;
+    }
+    return -1;
+}
+
+const char* router(const char* path)
 {
-    if(strcmp("/suchyKreweta", requestedPath) == 0) {
+    if(strcmp("/suchyKreweta", path) == 0) {
         return STATIC_RESPONSE_SUCHA_KREWETA;
     }
-    else if(strcmp("/vanish", requestedPath) == 0) {
+    else if(strcmp("/vanish", path) == 0) {
         return NULL;
     }
     else {
@@ -64,108 +76,113 @@ const char* pseudoRouter(const char* requestedPath)
     }
 }
 
+void handler_sig13(int signum)
+{
+    printf("Broken pipe error\n");
+}
+
 int main(void) {
-    // Tu trzymamy przychodzące dane od przeglądarki.
-    char inputBuffer[INPUT_BUFFER_SIZE + 1];
+    signal(13, handler_sig13);
 
-    // Tu tworzymy socket servera IPv4.
-    int server = socket(AF_INET, SOCK_STREAM, 0);
-    fcntl(server, O_NONBLOCK, 1);
+    char input_buffer[INPUT_BUFFER_SIZE + 1];
+    char path_buffer[1024];
+    char ip_buffer[16];
 
-    // Tu obsługujemy błąd w tworzeniu socketa servera.
-    if(server == -1)
+    struct sockaddr_in client_data;
+    socklen_t size = sizeof(client_data);
+
+    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if(server_socket == -1)
     {
-        printf("Nie udalo sie stworzyc socketa aha12\n");
+        printf("server socket ret -1\n");
         exit(-1);
     }
 
-    // Tu przypisujemy adres IP i port do servera.
+    int fcntl_status = fcntl(server_socket, F_SETFL, O_NONBLOCK);
+    if (fcntl_status == -1) {
+        perror("calling fcntl");
+    }
+
+    int clients[MAX_CLIENTS];
+    for(int i = 0; i < MAX_CLIENTS;i++)
+    {
+        clients[i] = 0;
+    }
+
     struct sockaddr_in sai;
-    sai.sin_addr.s_addr = inet_addr("0.0.0.0");   // IP na którym tworzymy server
-    sai.sin_family = AF_INET;                       // IPv4
-    sai.sin_port = htons(8181);                     // Port htons(port)
-    memset(sai.sin_zero, 0, 8);                     // Padding - zawsze ustaw na 0.
+    sai.sin_addr.s_addr = inet_addr("0.0.0.0");   
+    sai.sin_family = AF_INET;                       
+    sai.sin_port = htons(8181);                     
+    memset(sai.sin_zero, 0, 8);                     
 
-    int ret = bind(server, (struct sockaddr*)&sai, sizeof(sai));
-
-    // Tu obsługujemy bład przypisania IP i portu do servera.
-    // WAŻNE żeby to obsłużyć bo ta operacja często może sie nie udać.
+    int ret = bind(server_socket, (struct sockaddr*)&sai, sizeof(sai));
     if(ret != 0)
     {
-        printf("Dupa nie dziala aha ok\n");
-        exit(-1);
-    }
-    
-    // Pozwalamy na połączenia przychodzące do naszego servera.
-    // (Ustawiamy stan na LISTENING)
-    // Te 1024 to backlog czyli kolejka oczekujących połączeń na zaakceptowanie.
-    ret = listen(server, 1024);
-
-    // Obsługa błędu przy ustawianiu stanu socketa.
-    if(ret != 0)
-    {
-        printf("Dupa nie udalo sie nasluchiwac na komendzie w plocku\n");
+        printf("server bind failed\n");
         exit(-1);
     }
 
-    // Obsługa połączeń przychodzących.
-    // Pętla nieskończona po to żeby nasz server się nie wyłączył po obsłużeniu jednego klienta.
-    while(1)
+    ret = listen(server_socket, 1024);
+    if(ret != 0)
     {
-        char pathBuffer[1024];
-        char ipBuffer[16];
-
-        struct sockaddr_in clientData;
-        socklen_t size = sizeof(clientData);
-
-        // Akceptujemy połączenie przychodzące.
-        // Pod client mamy uchwyt do clienta.
-        // Tego uchwytu używamy np. żeby coś do niego wysłać albo coś odebrać.
-        int client = accept(server, (struct sockaddr*)&clientData, &size);
-        fcntl(client, O_NONBLOCK, 1);
-
-        // Obsługujemy błąd przy akceptacji.
-        if(client == -1)
-        {
-            printf("Dupa blond w accept\n");
-            continue;
-        }
-
-        printf("Accepted connection from %s:%d\n", inet_ntop(AF_INET, &clientData.sin_addr.s_addr, ipBuffer, 16), ntohs(clientData.sin_port));
-
-        // Odbieramy request od przeglądarki.
-        size_t received = recv(client, inputBuffer, INPUT_BUFFER_SIZE, 0);
-        inputBuffer[received] = 0x00;
-
-        findPath(inputBuffer, pathBuffer);
-        printf("Requested path: %s\n", pathBuffer);
-
-        // Wypisujemy request od przeglądarki.
-        //printf("Received data from client:\n%s\n", inputBuffer);
-
-        const char* response = pseudoRouter(pathBuffer);
-
-        if(response == NULL)
-        {
-            // Zamykamy transmisje na sockecie clienta.
-            shutdown(client, SHUT_RDWR);
-            // Zamykamy socket clienta.
-            close(client);
-            break;
-        }
-
-        // Wysyłamy stringa do przeglądarki.
-        size_t sent = send(client, response, strlen(response), 0);
-
-        // Zamykamy transmisje na sockecie clienta.
-        shutdown(client, SHUT_RDWR);
-        // Zamykamy socket clienta.
-        close(client);
-
-        printf("Sent %zu bytes to client and closed connection.\n", sent);
+        printf("server listen failed\n");
+        exit(-1);
     }
 
-    close(server);
+    while(1) {
+        while(1) {
+            int client_socket = accept(server_socket, (struct sockaddr *)&client_data, &size);
+            if (client_socket == -1) 
+                break;
 
+            int free_socket = find_free_socket(clients, MAX_CLIENTS);
+            if (free_socket == -1) {
+                printf("Max clients reached (%d)\n", MAX_CLIENTS);
+                shutdown(client_socket, SHUT_RDWR);
+                close(client_socket);
+            }
+
+            printf("Accepted connection from %s:%d\n", inet_ntop(AF_INET, &client_data.sin_addr.s_addr, ip_buffer, 16),
+                    ntohs(client_data.sin_port));
+
+            fcntl(client_socket, F_SETFL, O_NONBLOCK);
+            clients[free_socket] = client_socket;
+        }
+
+        for(int i=0;i<MAX_CLIENTS;i++) {
+            if(clients[i] == 0) 
+                continue;
+
+            size_t received = recv(clients[i], input_buffer, INPUT_BUFFER_SIZE, 0);
+            input_buffer[received] = 0x00;
+
+            if (received == -1) {
+                if(errno != EWOULDBLOCK && errno != EAGAIN)
+                {
+                    printf("Error occured on socket, closing connection %d.\n", i);
+                    shutdown(clients[i], SHUT_RDWR);
+                    close(clients[i]);
+                    clients[i] = 0;
+                }
+                continue;
+            }
+
+            find_path(input_buffer, path_buffer);
+            printf("Requested path:\n%s by socket %d\n", path_buffer, i);
+
+            const char *response = router(path_buffer);
+            if (response == NULL) {
+                shutdown(clients[i], SHUT_RDWR);
+                close(clients[i]);
+                clients[i] = 0;
+                break;
+            }
+
+            send(clients[i], response, strlen(response), 0);
+        }
+    }
+
+    shutdown(server_socket, SHUT_RDWR);
+    close(server_socket);
     return 0;
 }
